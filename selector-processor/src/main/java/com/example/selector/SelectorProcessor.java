@@ -85,15 +85,24 @@ import java.util.StringJoiner;
  * <h2>Which property types are descended into</h2>
  * A property type is a <em>model type</em> — meaning a nested selector is generated for it and
  * returned — when it is a declared class, record or interface, is not an enum or annotation, is
- * not a {@code java.* / javax.* / jakarta.*} type, and sits under {@link #OPTION_BASE_PACKAGE}.
+ * not a {@code java.* / javax.* / jakarta.*} type, and sits under the base package.
  * Everything else is a <em>leaf</em> and is returned as its own nullable value. In particular
  * collections, maps, {@code Optional}, dates, enums and arrays are leaves — this processor
  * navigates object graphs, it does not iterate them.
  *
- * <h2>Options</h2>
- * {@code -Aselector.basePackage=com.acme.model} restricts which property types count as model
- * types. When unset, <em>any</em> declared non-enum type outside the JDK is descended into,
- * including third-party types — always set it in a real project.
+ * <h2>Bounding the recursion</h2>
+ * By default there is <b>no package bound</b>: recursion follows whatever types the model
+ * references, however they are packaged, stopping only where the leaf rules above apply. That
+ * is the common case and needs no configuration.
+ *
+ * <p>A bound can be applied when a model references a third-party type you would rather treat
+ * as an opaque leaf, resolved per annotated root, most specific first:
+ * <ol>
+ *   <li>{@code @GenerateSelector("com.acme")} — the annotation's own value;</li>
+ *   <li>{@code -Aselector.basePackage=com.acme} — a project-wide default.</li>
+ * </ol>
+ * Each root carries its own bound through the recursion, so two roots configured differently
+ * do not interfere.
  *
  * <h2>Limitations</h2>
  * Generic property types are emitted erased ({@code List<T>} becomes {@code List}), because the
@@ -138,8 +147,12 @@ public class SelectorProcessor extends AbstractProcessor {
     private Filer filer;
     private Messager messager;
 
-    /** Value of {@link #OPTION_BASE_PACKAGE}; empty means "no restriction". */
-    private String modelBasePackage = "";
+    /**
+     * Project-wide default from {@link #OPTION_BASE_PACKAGE}. Empty when the option was not
+     * given, in which case each root falls back to its own package — see
+     * {@link #basePackageFor(TypeElement)}.
+     */
+    private String optionBasePackage = "";
 
     /**
      * Fully-qualified names of model types already written, which both prevents a
@@ -155,7 +168,7 @@ public class SelectorProcessor extends AbstractProcessor {
         this.typeUtils = processingEnv.getTypeUtils();
         this.filer = processingEnv.getFiler();
         this.messager = processingEnv.getMessager();
-        this.modelBasePackage = processingEnv.getOptions().getOrDefault(OPTION_BASE_PACKAGE, "");
+        this.optionBasePackage = processingEnv.getOptions().getOrDefault(OPTION_BASE_PACKAGE, "");
     }
 
     @Override
@@ -174,10 +187,10 @@ public class SelectorProcessor extends AbstractProcessor {
             return false;
         }
 
-        Deque<TypeElement> pendingModelTypes = new ArrayDeque<>();
+        Deque<PendingModelType> pendingModelTypes = new ArrayDeque<>();
         for (Element annotated : roundEnv.getElementsAnnotatedWith(GenerateSelector.class)) {
             if (annotated instanceof TypeElement modelType && isSelectableKind(annotated.getKind())) {
-                pendingModelTypes.add(modelType);
+                pendingModelTypes.add(new PendingModelType(modelType, basePackageFor(modelType)));
             } else {
                 messager.printMessage(Diagnostic.Kind.ERROR,
                         "@GenerateSelector applies to a class, record or interface", annotated);
@@ -185,12 +198,13 @@ public class SelectorProcessor extends AbstractProcessor {
         }
 
         while (!pendingModelTypes.isEmpty()) {
-            TypeElement modelType = pendingModelTypes.poll();
+            PendingModelType pending = pendingModelTypes.poll();
+            TypeElement modelType = pending.type();
             if (!alreadyGeneratedTypes.add(modelType.getQualifiedName().toString())) {
                 continue; // already written, or we have come back round a cycle
             }
             try {
-                writeSelectorFor(modelType, pendingModelTypes);
+                writeSelectorFor(modelType, pending.basePackage(), pendingModelTypes);
             } catch (IOException e) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
                         "Failed to generate selector for " + modelType.getQualifiedName()
@@ -198,6 +212,32 @@ public class SelectorProcessor extends AbstractProcessor {
             }
         }
         return true;
+    }
+
+    /**
+     * A model type waiting to be generated, carrying the base package that bounds recursion
+     * from the root it was discovered under. It travels with the type rather than living in a
+     * field so that two roots in different packages can each recurse within their own.
+     */
+    private record PendingModelType(TypeElement type, String basePackage) {
+    }
+
+    /**
+     * Resolves the optional package bound on recursion, most specific first: the annotation's
+     * own {@code value}, then the project-wide {@code -Aselector.basePackage}.
+     *
+     * <p>Returns empty when neither is set, which is the default and means <em>no package
+     * bound</em>: recursion simply follows the types the model references, stopping only at the
+     * leaf rules (JDK types, enums, collections, arrays, primitives). Most projects never need
+     * to set either — the bound exists for the case where a model references a third-party type
+     * you would rather treat as opaque.
+     */
+    private String basePackageFor(TypeElement annotatedType) {
+        GenerateSelector annotation = annotatedType.getAnnotation(GenerateSelector.class);
+        if (annotation != null && !annotation.value().isEmpty()) {
+            return annotation.value();
+        }
+        return optionBasePackage;
     }
 
     /**
@@ -259,10 +299,14 @@ public class SelectorProcessor extends AbstractProcessor {
      * guard, repeated at each level, is the whole null-safety mechanism.
      *
      * @param modelType         the type to generate a selector for
+     * @param basePackage       bounds which property types are descended into, inherited from
+     *                          the annotated root this type was reached from
      * @param pendingModelTypes queue that model-typed properties are appended to, so they get
      *                          selectors of their own
      */
-    private void writeSelectorFor(TypeElement modelType, Deque<TypeElement> pendingModelTypes)
+    private void writeSelectorFor(TypeElement modelType,
+                                  String basePackage,
+                                  Deque<PendingModelType> pendingModelTypes)
             throws IOException {
 
         String packageName = elementUtils.getPackageOf(modelType).getQualifiedName().toString();
@@ -297,7 +341,7 @@ public class SelectorProcessor extends AbstractProcessor {
               .append("> asOptional() { return java.util.Optional.ofNullable(value); }\n");
 
         findPropertiesOf(modelType).forEach((propertyName, accessor) ->
-                appendPropertyAccessor(source, accessor, propertyName, pendingModelTypes));
+                appendPropertyAccessor(source, accessor, propertyName, basePackage, pendingModelTypes));
         source.append("}\n");
 
         try (Writer writer = filer.createSourceFile(selectorQualifiedName, modelType).openWriter()) {
@@ -325,21 +369,25 @@ public class SelectorProcessor extends AbstractProcessor {
      * public java.lang.Integer retryCount() { return value == null ? null : value.getRetryCount(); }
      * }</pre>
      *
+     * @param basePackage       bounds whether the property type counts as a model type
      * @param pendingModelTypes queue a model-typed property is appended to, so that its own
      *                          selector gets generated in turn
      */
     private void appendPropertyAccessor(StringBuilder source,
                                         ExecutableElement accessor,
                                         String propertyName,
-                                        Deque<TypeElement> pendingModelTypes) {
+                                        String basePackage,
+                                        Deque<PendingModelType> pendingModelTypes) {
 
         TypeMirror propertyType = accessor.getReturnType();
         String accessorCall = accessor.getSimpleName() + "()";
         source.append('\n');
 
-        if (isModelType(propertyType)) {
+        if (isModelType(propertyType, basePackage)) {
             TypeElement nestedModelType = (TypeElement) typeUtils.asElement(propertyType);
-            pendingModelTypes.add(nestedModelType);
+            // The nested type inherits this root's base package, so recursion stays bounded
+            // the same way however deep it goes.
+            pendingModelTypes.add(new PendingModelType(nestedModelType, basePackage));
 
             String nestedSelectorName = qualify(
                     elementUtils.getPackageOf(nestedModelType).getQualifiedName().toString(),
@@ -434,7 +482,7 @@ public class SelectorProcessor extends AbstractProcessor {
      * True when the property type warrants its own selector, i.e. it is one of <em>our</em>
      * model types rather than a scalar, a JDK type or a third-party type.
      */
-    private boolean isModelType(TypeMirror propertyType) {
+    private boolean isModelType(TypeMirror propertyType, String basePackage) {
         if (propertyType.getKind() != TypeKind.DECLARED) {
             return false; // primitives, arrays and type variables are always leaves
         }
@@ -450,17 +498,18 @@ public class SelectorProcessor extends AbstractProcessor {
             // JDK / Jakarta types — List, Map, Optional, LocalDate, ... — are leaves.
             return false;
         }
-        return isUnderBasePackage(qualifiedName);
+        return isUnderBasePackage(qualifiedName, basePackage);
     }
 
     /**
      * Prefix match on whole package segments, so a base package of {@code com.acme.model} does
-     * not accidentally capture {@code com.acme.modelling}.
+     * not accidentally capture {@code com.acme.modelling}. An empty base package — only
+     * reachable for a root in the default package — imposes no restriction.
      */
-    private boolean isUnderBasePackage(String qualifiedName) {
-        return modelBasePackage.isEmpty()
-                || qualifiedName.equals(modelBasePackage)
-                || qualifiedName.startsWith(modelBasePackage + ".");
+    private boolean isUnderBasePackage(String qualifiedName, String basePackage) {
+        return basePackage.isEmpty()
+                || qualifiedName.equals(basePackage)
+                || qualifiedName.startsWith(basePackage + ".");
     }
 
     /**

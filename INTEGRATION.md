@@ -47,11 +47,15 @@ Copy the build configuration from [`selector-example/pom.xml`](selector-example/
 - add the processor as a **`provided` dependency** — this makes the `@GenerateSelector` symbol
   resolve when compiling your source;
 - add it to **`annotationProcessorPaths`** — this actually runs the processor, and keeps it off
-  your runtime classpath;
-- add **`-Aselector.basePackage=<your.model.package>`** so it only recurses into your types.
+  your runtime classpath.
 
 Both entries are needed. `annotationProcessorPaths` sets `-processorpath`, which is separate
 from the compile classpath, so the annotation symbol still needs the `provided` dependency.
+
+No compiler arguments are required. Recursion follows whatever types your model references, so
+models spread across packages need no configuration — see
+[Bounding the recursion](#bounding-the-recursion) for the one case where you might want to
+restrict it.
 
 ### 3. Annotate your root type(s)
 
@@ -106,12 +110,12 @@ eyeball the generated selector — every property you expect should have a metho
 when the return type is `boolean`/`Boolean`; record component accessors. Inherited getters are
 included. `getClass()` is excluded.
 
-**Descended into** (returns a nested selector) when the property type is a declared, non-enum
-type outside `java.* / javax.* / jakarta.*` **and** under `-Aselector.basePackage`.
+**Descended into** (returns a nested selector) when the property type is a declared class, record
+or interface outside `java.* / javax.* / jakarta.*` — that is, any type of yours the model
+references. Package layout is irrelevant unless you set a bound.
 
 **Treated as a leaf** (returns the raw nullable value): everything else — enums, collections,
-maps, `Optional`, dates, arrays, primitives (boxed so they can be null), and any type outside
-your base package.
+maps, `Optional`, dates, arrays, and primitives (boxed so they can be null).
 
 **Naming** follows JavaBeans: `getBic() → bic()`, and an acronym keeps its case,
 `getURL() → URL()`. A property whose name would be a Java keyword keeps its accessor name
@@ -125,11 +129,28 @@ emitted file cannot fail to compile because of an unimported or ambiguous simple
 
 ---
 
+## Bounding the recursion
+
+**By default there is no bound.** Recursion follows the types your model actually references,
+wherever they live, stopping only at the leaf rules above (JDK types, enums, collections, arrays,
+primitives). Package layout is irrelevant — `com.acme.payments.Payment` referencing
+`com.acme.parties.Party` just works, with no configuration.
+
+You only need a bound if a model references a **third-party type** you would rather treat as an
+opaque value than generate a selector for. Two ways, most specific first:
+
+1. **`@GenerateSelector("com.acme")`** — on the root, keeps generation to your own code;
+2. **`-Aselector.basePackage=com.acme`** in `compilerArgs` — the same thing project-wide.
+
+Each root carries its own bound through the recursion, so roots configured differently do not
+interfere with each other.
+
+---
+
 ## Other notes
 
-- **`-Aselector.basePackage` is matched on whole package segments**, so `com.acme.model` will not
-  capture `com.acme.modelling`. Without the option, *any* non-JDK declared type is descended into,
-  including third-party types — always set it.
+- **Matching is on whole package segments**, so `com.acme.model` will not capture
+  `com.acme.modelling`.
 - **Collections**: per-element navigation into `List<Foo>` is intentionally out of scope. The
   selector navigates object graphs; it does not iterate them.
 - **Cycles and diamonds** (`A → B → A`, or two properties of the same type) are handled — each
@@ -152,7 +173,7 @@ emitted file cannot fail to compile because of an unimported or ambiguous simple
 
 ## Tests
 
-`selector-processor` has 65 tests, run with `mvn -pl selector-processor test`. They invoke a real
+`selector-processor` has 70 tests, run with `mvn -pl selector-processor test`. They invoke a real
 `javac` with the processor attached ([`SelectorCompilation`](selector-processor/src/test/java/com/example/selector/SelectorCompilation.java)),
 then assert on both the emitted source and the compiled runtime behaviour:
 

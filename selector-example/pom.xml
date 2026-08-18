@@ -49,11 +49,10 @@
                              here as well, or this processor will not see Lombok's generated
                              getters. See INTEGRATION.md. -->
                     </annotationProcessorPaths>
-                    <compilerArgs>
-                        <!-- Bound the recursion to your own model package. Without this, any
-                             non-JDK type reachable from a model is descended into. -->
-                        <arg>-Aselector.basePackage=com.example.payments.model</arg>
-                    </compilerArgs>
+                    <!-- No compilerArgs needed: recursion just follows the types the models
+                         reference. Restrict it only if a model references a third-party type you
+                         would rather leave opaque, with @GenerateSelector("com.example") on the
+                         root or -Aselector.basePackage=... project-wide. -->
                 </configuration>
             </plugin>
         </plugins>

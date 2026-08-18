@@ -221,15 +221,102 @@ class SelectorEdgeCaseTest {
         }
 
         @Test
-        @DisplayName("when unset, everything outside the JDK is descended into")
-        void withoutBasePackageDescendsIntoForeignTypes() {
+        @DisplayName("unset by default: recursion follows every referenced type outside the JDK")
+        void unboundedByDefault() {
             SelectorCompilation.Result result =
                     compile(null, TestModels.paymentGraph()).assertSucceeded();
 
+            assertTrue(result.hasGenerated("com.acme.model.PartySelector"));
+            assertTrue(result.hasGenerated("com.acme.model.FinancialInstitutionSelector"));
             assertTrue(result.hasGenerated("com.thirdparty.VendorSelector"),
-                    "without the option, third-party types are descended into — which is exactly "
-                            + "why the option should always be set; generated: "
+                    "with no bound set, a referenced third-party type is descended into too; "
+                            + "generated: " + result.generatedTypeNames());
+        }
+
+        @Test
+        @DisplayName("setting a bound keeps generation to your own code")
+        void boundExcludesThirdPartyTypes() {
+            SelectorCompilation.Result result =
+                    compile("com.acme", TestModels.paymentGraph()).assertSucceeded();
+
+            assertTrue(result.hasGenerated("com.acme.model.PartySelector"));
+            assertFalse(result.hasGenerated("com.thirdparty.VendorSelector"),
+                    "generated: " + result.generatedTypeNames());
+        }
+    }
+
+    @Nested
+    @DisplayName("choosing the base package")
+    class BasePackageResolution {
+
+        /** A root in one package with a property type in a sibling package. */
+        private Map<String, String> siblingPackages(String annotation) {
+            return sources(
+                    "com.acme.payments.Payment", """
+                            package com.acme.payments;
+
+                            import com.example.selector.GenerateSelector;
+                            import com.acme.parties.Party;
+
+                            %s
+                            public class Payment {
+                                public Party getPayee() { return null; }
+                            }
+                            """.formatted(annotation),
+                    "com.acme.parties.Party", """
+                            package com.acme.parties;
+
+                            public class Party {
+                                public String getName() { return null; }
+                            }
+                            """);
+        }
+
+        @Test
+        @DisplayName("by default a referenced type in a sibling package is followed")
+        void followsReferencesAcrossPackagesByDefault() {
+            SelectorCompilation.Result result =
+                    compile(null, siblingPackages("@GenerateSelector")).assertSucceeded();
+
+            // Payment is in com.acme.payments and Party in com.acme.parties: package layout
+            // does not matter, only that Payment references Party.
+            assertTrue(result.hasGenerated("com.acme.parties.PartySelector"),
+                    "generated: " + result.generatedTypeNames());
+        }
+
+        @Test
+        @DisplayName("the annotation's value narrows it, with no compiler args")
+        void annotationValueNarrowsTheBound() {
+            SelectorCompilation.Result result =
+                    compile(null, siblingPackages("@GenerateSelector(\"com.acme.payments\")"))
+                            .assertSucceeded();
+
+            assertFalse(result.hasGenerated("com.acme.parties.PartySelector"),
+                    "com.acme.parties is outside the declared bound; generated: "
                             + result.generatedTypeNames());
+        }
+
+        @Test
+        @DisplayName("the compiler option still works as a project-wide bound")
+        void compilerOptionStillApplies() {
+            SelectorCompilation.Result result =
+                    compile("com.acme.payments", siblingPackages("@GenerateSelector"))
+                            .assertSucceeded();
+
+            assertFalse(result.hasGenerated("com.acme.parties.PartySelector"),
+                    "generated: " + result.generatedTypeNames());
+        }
+
+        @Test
+        @DisplayName("the annotation wins over the compiler option")
+        void annotationBeatsCompilerOption() {
+            // The option alone would exclude Party; the annotation widens it back to com.acme.
+            SelectorCompilation.Result result =
+                    compile("com.acme.payments", siblingPackages("@GenerateSelector(\"com.acme\")"))
+                            .assertSucceeded();
+
+            assertTrue(result.hasGenerated("com.acme.parties.PartySelector"),
+                    "generated: " + result.generatedTypeNames());
         }
     }
 

@@ -26,11 +26,26 @@ import java.lang.annotation.Target;
  * ({@code A -> B -> A}) and diamonds (two properties of the same type) are handled — each type
  * is generated exactly once.
  *
- * <p>Bound what counts as "reachable" with the compiler option
- * {@code -Aselector.basePackage=<your.model.package>}; see {@link SelectorProcessor} for the
- * rules on which property types are descended into and which are treated as leaves.
+ * <p>Recursion simply follows the types your model references — across packages, however they
+ * are arranged — stopping at the leaf rules described in {@link SelectorProcessor}: JDK types,
+ * enums, collections, arrays and primitives are returned as values rather than descended into.
+ * No configuration is required.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
 public @interface GenerateSelector {
+
+    /**
+     * Optional package prefix bounding how far recursion follows property types. When set, only
+     * types under this package get a selector; anything else becomes an opaque leaf value.
+     *
+     * <p>Empty by default, meaning no bound — every referenced type outside the JDK is descended
+     * into. Set it when a model references a third-party type you would rather not generate
+     * selectors for, e.g. {@code @GenerateSelector("com.acme")} to keep generation to your own
+     * code.
+     *
+     * <p>Matching is on whole package segments, so {@code com.acme.model} does not capture
+     * {@code com.acme.modelling}.
+     */
+    String value() default "";
 }
