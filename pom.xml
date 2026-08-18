@@ -21,6 +21,7 @@
     <modules>
         <module>selector-processor</module>
         <module>selector-example</module>
+        <module>selector-lombok-example</module>
     </modules>
 
     <properties>

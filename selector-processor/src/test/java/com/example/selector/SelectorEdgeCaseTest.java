@@ -469,6 +469,35 @@ class SelectorEdgeCaseTest {
     }
 
     @Nested
+    @DisplayName("a type with no visible getters")
+    class NoVisibleProperties {
+
+        @Test
+        @DisplayName("warns rather than silently emitting an empty selector")
+        void warnsWhenNoPropertiesAreFound() {
+            // This is what a Lombok model looks like when Lombok was left off the processor
+            // path: fields, but no getters for this processor to see.
+            SelectorCompilation.Result result = compile("com.acme.model", sources(
+                    "com.acme.model.Fieldsonly", """
+                            package com.acme.model;
+
+                            import com.example.selector.GenerateSelector;
+
+                            @GenerateSelector
+                            public class Fieldsonly {
+                                private String id;
+                                private String name;
+                            }
+                            """)).assertSucceeded();
+
+            assertTrue(result.warnings().stream()
+                            .anyMatch(message -> message.contains("No properties found")
+                                    && message.contains("Lombok")),
+                    "expected a warning naming the likely cause, got: " + result.warnings());
+        }
+    }
+
+    @Nested
     @DisplayName("name clashes")
     class NameClashes {
 

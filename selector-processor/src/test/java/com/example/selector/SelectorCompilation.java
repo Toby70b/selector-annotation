@@ -112,6 +112,14 @@ final class SelectorCompilation {
                     .collect(Collectors.toList());
         }
 
+        List<String> warnings() {
+            return diagnostics.stream()
+                    .filter(d -> d.getKind() == Diagnostic.Kind.WARNING
+                            || d.getKind() == Diagnostic.Kind.MANDATORY_WARNING)
+                    .map(d -> d.getMessage(null))
+                    .collect(Collectors.toList());
+        }
+
         List<String> messages() {
             return diagnostics.stream()
                     .map(d -> d.getKind() + ": " + d.getMessage(null))

@@ -340,7 +340,19 @@ public class SelectorProcessor extends AbstractProcessor {
               .append("    public java.util.Optional<").append(modelTypeName)
               .append("> asOptional() { return java.util.Optional.ofNullable(value); }\n");
 
-        findPropertiesOf(modelType).forEach((propertyName, accessor) ->
+        Map<String, ExecutableElement> properties = findPropertiesOf(modelType);
+        if (properties.isEmpty()) {
+            // A selector with only terminal methods is useless, and the usual cause is that
+            // getters exist but this processor could not see them — most often Lombok, which
+            // injects them from its own processor and so must run first on the processor path.
+            messager.printMessage(Diagnostic.Kind.WARNING,
+                    "No properties found on " + modelType.getQualifiedName()
+                            + ", so " + selectorSimpleName + " will have no accessors. If this type"
+                            + " relies on Lombok (or another processor) for its getters, add that"
+                            + " processor to annotationProcessorPaths ahead of this one.",
+                    modelType);
+        }
+        properties.forEach((propertyName, accessor) ->
                 appendPropertyAccessor(source, accessor, propertyName, basePackage, pendingModelTypes));
         source.append("}\n");
 

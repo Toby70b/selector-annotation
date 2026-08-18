@@ -4,9 +4,10 @@
 
 ```
 selector-annotation/
-├── pom.xml                 aggregator (com.example:selector-parent)
-├── selector-processor/     the annotation + processor — STANDALONE, no <parent>
-└── selector-example/       a worked example: annotated models + a runnable demo
+├── pom.xml                  aggregator (com.example:selector-parent)
+├── selector-processor/      the annotation + processor — STANDALONE, no <parent>
+├── selector-example/        a worked example: annotated models + a runnable demo
+└── selector-lombok-example/ the same, with Lombok-generated getters, to prove that path works
 ```
 
 `selector-processor` deliberately declares no `<parent>`, so you can copy the directory into
@@ -92,12 +93,18 @@ This determines whether it works out of the box.
   of the box; this is the common case for API model objects.
 - **Java records** — works out of the box. Record accessors are `bic()` rather than `getBic()`,
   so they are picked up by record component rather than by naming convention.
-- **Lombok (`@Data` / `@Getter`)** — Lombok injects getters via its *own* processor, and by
-  default another annotation processor won't see them, so you'd get selectors missing those
-  properties. Fix: add both `org.projectlombok:lombok` **and**
-  `org.projectlombok:lombok-mapstruct-binding` to `annotationProcessorPaths` (see the commented
-  block in `selector-example/pom.xml`). Despite the name, that binding is the standard fix for
-  "my annotation processor can't see Lombok's getters." Test it on one model before rolling out.
+- **Lombok (`@Data` / `@Getter`)** — works, **provided Lombok is on `annotationProcessorPaths`
+  ahead of this processor**. This is verified end to end by `selector-lombok-example`, against
+  Lombok 1.18.40: `@Data` getters, `is`-style booleans, boxed primitives and recursion through
+  non-annotated Lombok types all come out correctly.
+
+  `lombok-mapstruct-binding` turned out **not** to be needed — listing `lombok` itself first on
+  the processor path is sufficient. Add the binding only if you also use MapStruct.
+
+  The failure mode is worth knowing because it is quiet: if Lombok is a plain dependency but
+  *not* on `annotationProcessorPaths`, the build **succeeds** and you get a selector with only
+  the terminal methods and no properties at all. The processor now emits a warning naming this
+  as the likely cause, but it is a warning, not an error — so it will scroll past in CI.
 
 If you're unsure which bucket your models fall in, generate against a single model first and
 eyeball the generated selector — every property you expect should have a method.
@@ -173,7 +180,7 @@ interfere with each other.
 
 ## Tests
 
-`selector-processor` has 70 tests, run with `mvn -pl selector-processor test`. They invoke a real
+`selector-processor` has 71 tests, run with `mvn -pl selector-processor test`. They invoke a real
 `javac` with the processor attached ([`SelectorCompilation`](selector-processor/src/test/java/com/example/selector/SelectorCompilation.java)),
 then assert on both the emitted source and the compiled runtime behaviour:
 
