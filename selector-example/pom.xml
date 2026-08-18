@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example</groupId>
+        <artifactId>selector-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>selector-example</artifactId>
+    <packaging>jar</packaging>
+
+    <name>selector-example</name>
+    <description>
+        Worked example: annotated model objects plus a demo showing the generated selectors.
+        Copy this module's build configuration into whichever of your modules holds API models.
+    </description>
+
+    <dependencies>
+        <!-- 'provided' makes the @GenerateSelector symbol resolve when compiling this module's
+             source, and keeps the processor off the runtime classpath. This is separate from
+             annotationProcessorPaths below: that sets -processorpath, which is not the compile
+             classpath, so both entries are needed. -->
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>selector-processor</artifactId>
+            <version>1.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>com.example</groupId>
+                            <artifactId>selector-processor</artifactId>
+                            <version>1.0.0</version>
+                        </path>
+                        <!-- Using Lombok on your models? Add lombok and lombok-mapstruct-binding
+                             here as well, or this processor will not see Lombok's generated
+                             getters. See INTEGRATION.md. -->
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <!-- Bound the recursion to your own model package. Without this, any
+                             non-JDK type reachable from a model is descended into. -->
+                        <arg>-Aselector.basePackage=com.example.payments.model</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
